@@ -1,103 +1,292 @@
-import Image from "next/image";
+"use client";
+import { useState, useRef } from "react";
+import axios from "axios";
+import ReactMarkdown from "react-markdown";
+
+function PDFChatInterface() {
+  const [schemaJson, setSchemaJson] = useState("");
+  const [metadata, setMetadata] = useState({});
+  const [description, setDescription] = useState(""); // structured markdown
+  const [generatedJson, setGeneratedJson] = useState({}); // schema-based JSON
+  const [suggestedPrompt, setSuggestedPrompt] = useState("");
+  const [userPrompt, setUserPrompt] = useState("");
+  const [promptResult, setPromptResult] = useState(null);
+
+  const [pdfUrl, setPdfUrl] = useState(null);
+  const [fileType, setFileType] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const fileInputRef = useRef(null);
+  const uploadedFile = useRef(null);
+
+  // Handle file selection + preview
+  const handleFileUpload = (event) => {
+    const file = event.target.files[0];
+    if (file) {
+      uploadedFile.current = file;
+      const ext = file.name.split(".").pop().toLowerCase();
+      setFileType(ext);
+
+      if (ext === "pdf") {
+        const url = URL.createObjectURL(file);
+        setPdfUrl(url);
+      } else {
+        setPdfUrl(null);
+      }
+    }
+  };
+
+  // Process file with backend
+  const handleProcessFile = async () => {
+    if (!uploadedFile.current) {
+      alert("❌ Please upload a file first.");
+      return;
+    }
+    if (!schemaJson.trim()) {
+      alert("❌ Please provide schema JSON in the textarea.");
+      return;
+    }
+
+    try {
+      setLoading(true);
+
+      const formData = new FormData();
+      formData.append("file", uploadedFile.current);
+      formData.append("schema_json", schemaJson);
+
+      const response = await axios.post(
+        "http://localhost:8000/process-document/",
+        formData,
+        { headers: { "Content-Type": "multipart/form-data" } }
+      );
+
+      if (response.data.status === "success") {
+        setMetadata(response.data.metadata);
+        setDescription(response.data.structured_markdown);
+        setGeneratedJson(response.data.generated_json);
+        setSuggestedPrompt(response.data.suggested_prompt || "");
+      } else {
+        alert("❌ Error: " + response.data.message);
+      }
+    } catch (error) {
+      console.error(error);
+      alert("❌ API call failed: " + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Try prompt
+  const handleTryPrompt = async () => {
+    if (!userPrompt.trim()) return;
+
+    try {
+      const response = await axios.post("http://localhost:8000/try-prompt/", {
+        prompt: userPrompt,
+        structured_markdown: description,
+      });
+
+      setPromptResult(response.data.result);
+    } catch (err) {
+      console.error(err);
+      setPromptResult({ error: "Failed to try prompt" });
+    }
+  };
+
+  // Save prompt
+  const handleSavePrompt = async () => {
+    if (!userPrompt.trim() || !metadata.layout) {
+      alert("❌ Missing prompt or layout");
+      return;
+    }
+
+    try {
+      await axios.post("http://localhost:8000/save-prompt/", {
+        layout: metadata.layout,
+        prompt: userPrompt,
+      });
+
+      alert("✅ Prompt saved to Supabase!");
+    } catch (err) {
+      console.error(err);
+      alert("❌ Failed to save prompt");
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-6">
+      {/* Header */}
+      <div className="text-center mb-8">
+        <h1 className="text-4xl font-bold text-gray-800 mb-2">
+          PDF Intelligence Platform
+        </h1>
+        <p className="text-gray-600">
+          Upload, analyze, and extract structured data from documents
+        </p>
+      </div>
+
+      {/* Schema JSON Input */}
+      <div className="mb-6 p-6 bg-white rounded-2xl shadow-lg">
+        <textarea
+          value={schemaJson}
+          onChange={(e) => setSchemaJson(e.target.value)}
+          placeholder='Enter schema JSON (e.g., {"order_id": "", "customer_name": ""})'
+          className="w-full px-4 py-3 border text-black border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 h-24"
+        />
+        <div className="w-full flex justify-center">
+          <button
+            onClick={handleProcessFile}
+            disabled={loading}
+            className={`px-6 mt-4 py-3 ${
+              loading ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"
+            } text-white rounded-xl font-medium`}
+          >
+            {loading ? "Processing..." : "Process File"}
+          </button>
+        </div>
+      </div>
+
+      {/* 4-Panel Layout */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* Document Preview */}
+        <div className="bg-white rounded-2xl shadow-lg p-6">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-semibold text-gray-800">
+              Document Preview
+            </h2>
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm"
+            >
+              Upload File
+            </button>
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileUpload}
+              accept=".pdf,.doc,.docx,.xls,.xlsx"
+              className="hidden"
+            />
+          </div>
+
+          <div className="border-2 border-dashed border-gray-300 rounded-xl h-96 flex items-center justify-center bg-gray-50 overflow-hidden">
+            {fileType === "pdf" && pdfUrl ? (
+              <iframe
+                src={pdfUrl}
+                className="w-full h-full"
+                frameBorder="0"
+                title="PDF Preview"
+              />
+            ) : uploadedFile.current ? (
+              <div className="text-center p-4">
+                <div className="w-16 h-20 bg-indigo-500 mx-auto mb-4 rounded-lg flex items-center justify-center">
+                  <span className="text-white font-bold text-2xl">
+                    {fileType.toUpperCase()}
+                  </span>
+                </div>
+                <p className="text-gray-600 mb-2">
+                  {uploadedFile.current.name}
+                </p>
+              </div>
+            ) : (
+              <div className="text-center p-4">
+                <div className="w-16 h-20 bg-gray-400 mx-auto mb-4 rounded-lg flex items-center justify-center">
+                  <span className="text-white font-bold text-2xl">DOC</span>
+                </div>
+                <p className="text-gray-600 mb-2">
+                  Upload a PDF/Word/Excel to preview
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Metadata */}
+        
+        {/* Description */}
+        <div className="bg-white rounded-2xl shadow-lg p-6">
+          <h2 className="text-xl font-semibold text-gray-800 mb-4">
+            Description
+          </h2>
+          <div style={{overflow:"scroll"}} className="bg-gray-100 rounded-xl p-4 h-96 overflow-y-auto prose prose-sm max-w-none">
+            <ReactMarkdown>
+              {description || "No structured markdown yet"}
+            </ReactMarkdown>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl shadow-lg p-6">
+          <h2 className="text-xl font-semibold text-gray-800 mb-4">Chat</h2>
+
+          {/* Suggested Prompt */}
+          {suggestedPrompt && (
+            <div className="bg-gray-100 p-3 rounded-lg mb-3">
+              <p className="text-sm text-gray-700">
+                💡 Suggested Prompt: <strong>{suggestedPrompt}</strong>
+              </p>
+            </div>
+          )}
+
+          {/* User Prompt */}
+          <textarea
+            value={userPrompt}
+            onChange={(e) => setUserPrompt(e.target.value)}
+            placeholder="Enter your own prompt..."
+            className="w-full px-4 h-[75%] py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 text-black resize-none h-20"
+          />
+
+          {/* Actions */}
+          <div className="flex gap-2 mt-3">
+            <button
+              onClick={handleTryPrompt}
+              className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700"
+            >
+              Try
+            </button>
+            <button
+              onClick={handleSavePrompt}
+              className="flex-1 px-4 py-2 bg-green-600 text-white rounded-xl hover:bg-green-700"
+            >
+              Save
+            </button>
+          </div>
+
+          {/* Try Prompt Result */}
+          {promptResult && (
+            <div className="bg-gray-50 mt-4 p-3 rounded-lg text-sm text-gray-800">
+              <strong>Result:</strong>
+              <pre className="whitespace-pre-wrap">
+                {JSON.stringify(promptResult, null, 2)}
+              </pre>
+            </div>
+          )}
+        </div>
+
+
+        {/* Extracted JSON */}
+        <div className="bg-white rounded-2xl shadow-lg p-6">
+          <h2 className="text-xl font-semibold text-gray-800 mb-4">
+            Extracted JSON
+          </h2>
+          <div className="bg-gray-100 rounded-xl p-4 h-96 overflow-y-auto">
+            <pre className="text-gray-800 whitespace-pre-wrap text-sm">
+              {Object.keys(generatedJson).length > 0
+                ? JSON.stringify(generatedJson, null, 2)
+                : "No JSON extracted yet"}
+            </pre>
+          </div>
+        </div>
+      </div>
+
+      {/* Chat Panel */}
+    </div>
+  );
+}
 
 export default function Home() {
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.js
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
-
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
-        </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+    <div>
+      <PDFChatInterface />
     </div>
   );
 }
