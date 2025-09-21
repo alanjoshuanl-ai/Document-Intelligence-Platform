@@ -6,8 +6,6 @@ from pathlib import Path
 from typing import Dict, Any, Tuple
 
 import oci
-import numpy as np
-from sentence_transformers import SentenceTransformer
 from docling.document_converter import DocumentConverter
 
 
@@ -29,10 +27,16 @@ def sanitize_for_json(data):
             return str(data)
 
 
+def get_file_type(filename: str) -> str:
+    """Extract file type (extension) using regex, e.g., pdf, xlsx, docx."""
+    match = re.search(r'\.([^.]+)$', filename)
+    return match.group(1).lower() if match else "unknown"
+
+
 class DocumentProcessor:
     def __init__(self, config_file: str = "config.ini", profile: str = "DEFAULT"):
         """
-        Initialize OCI Generative AI Client + Docling + Embeddings.
+        Initialize OCI Generative AI Client + Docling.
         """
         if not Path(config_file).exists():
             raise FileNotFoundError("❌ config.ini not found. Please set up OCI credentials.")
@@ -57,18 +61,14 @@ class DocumentProcessor:
         # Docling converter
         self.converter = DocumentConverter()
 
-        # Embedding model
-        # self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
-
     def extract_with_docling(self, file_path: str) -> Tuple[str, Dict[str, Any]]:
         """
-        Convert file → Markdown and extract basic metadata.
+        Convert file → Markdown and return raw markdown + basic metadata.
         """
         try:
             conv_result = self.converter.convert(file_path)
             markdown = conv_result.document.export_to_markdown()
             metadata = {
-                "file_type": os.path.splitext(file_path)[-1].lstrip("."),
                 "language": getattr(conv_result, "language", "Unknown"),
             }
             return markdown, metadata
@@ -76,7 +76,7 @@ class DocumentProcessor:
             raise RuntimeError(f"Docling extraction failed: {e}")
 
     def _call_oci_llm(self, prompt: str) -> str:
-        """Helper to call OCI Generative AI with a text prompt."""
+        """Call OCI Generative AI with a text prompt and return response text."""
         content = oci.generative_ai_inference.models.TextContent()
         content.text = prompt
         message = oci.generative_ai_inference.models.Message()
@@ -110,60 +110,30 @@ class DocumentProcessor:
 
     def process_document(self, file_path: str) -> Dict[str, Any]:
         """
-        Full pipeline:
-        1. Convert file → Markdown
-        2. Structure Markdown with LLM
-        3. Extract metadata (file_type, language, layout, client_name)
-        4. Create embedding (layout + client_name)
-        5. Return structured_markdown, metadata, embedding
+        1. Docling → Markdown
+        2. Regex → File type
+        3. LLM → Extract language, client_name, layout
+        4. Return markdown + metadata
         """
-        # Step 1: Markdown
         markdown, doc_metadata = self.extract_with_docling(file_path)
-
-        # Step 2: Structure Markdown
-        struct_prompt = f"""
-        You are a document formatter.
-Your job is to rewrite the given Markdown content into a clean, standardized format.
-
-Rules:
-- Use GitHub-Flavored Markdown (GFM).
-- Preserve ALL information (headings, tables, bullet points).
-- Tables MUST be perfectly aligned with headers and separators.
-- Always include a header row for tables.
-- Do NOT invent new values, only clean formatting.
-- Avoid wrapping tables inside code blocks (```).
-
-Document content:
-{markdown}
-
-        """
-        structured_markdown = self._call_oci_llm(struct_prompt)
-
-        # Step 3: Metadata extraction (layout + client_name)
         filename = os.path.basename(file_path)
 
+        # Extract file type using regex
+        file_type = get_file_type(filename)
+
+        # LLM prompt to extract metadata
         meta_prompt = f"""
         You are a metadata extractor.
+        From the following document filename and content, return ONLY a JSON object:
 
-Given the document filename and Markdown content, return ONLY a JSON object with the following fields:
+        {{
+          "language": "<document language>",
+          "client_name": "<company name or client name>",
+          "layout": ["<column1>", "<column2>", "<column3>", ...]  # column headers if any
+        }}
 
-{{
-  "file_type": "<file extension from filename, e.g. pdf, xlsx, docx>",
-  "language": "<document language>",
-  "client_name": "<company or client name>",
-  "layout": ["<column1>", "<column2>", "<column3>", ...]
-}}
-
-Rules:
-- file_type MUST be derived from the filename extension only (lowercase, no dot).
-- Detect client_name from filename OR from document header (company name, client name, etc.).
-- "layout" must be an array of column headers from the MAIN tabular section of the document. If no tables, return [].
-- Return ONLY valid JSON, no explanations.
-
-Filename: {filename}
-
-Markdown:
-{markdown}
+        Filename: {filename}
+        Content: {markdown}
         """
         raw_meta = self._call_oci_llm(meta_prompt)
 
@@ -171,64 +141,54 @@ Markdown:
             meta_json = json.loads(raw_meta)
         except:
             meta_json = {
-                "file_type": doc_metadata.get("file_type", "NaN"),
                 "language": doc_metadata.get("language", "NaN"),
                 "layout": [],
                 "client_name": re.sub(r"\..*$", "", filename),
             }
 
-        # Normalize metadata
         normalized_meta = {
-            "file_type": meta_json.get("file_type", doc_metadata.get("file_type", "NaN")),
+            "file_type": file_type,  # from regex
             "language": meta_json.get("language", doc_metadata.get("language", "NaN")),
-            # always store layout as JSON string
-            "layout": json.dumps(meta_json.get("layout", [])),
-            "customer_info": meta_json.get("client_name", re.sub(r"\..*$", "", filename)),
+            "layout": meta_json.get("layout", []),
+            "client_name": meta_json.get("client_name", re.sub(r"\..*$", "", filename)),
         }
 
-        # # Step 4: Embedding
-        # embed_text = f"Layout: {normalized_meta['layout']}, Client: {normalized_meta['customer_info']}"
-        # embedding = self.embedder.encode(embed_text)
-        # embedding = np.array(embedding, dtype="float32")
-
-        # Step 5: Return
         return {
-            "structured_markdown": structured_markdown,
+            "structured_markdown": markdown,
             "metadata": normalized_meta,
-            # "embedding": embedding,
         }
 
-    def extract_json_with_schema(self, structured_markdown: str, schema: Dict[str, Any], suggested_prompt: str = None) -> Dict[str, Any]:
+    def extract_json_with_schema(
+        self,
+        structured_markdown: str,
+        schema: Dict[str, Any],
+        suggested_prompt: str = None
+    ) -> Dict[str, Any]:
         """
         Apply schema to structured markdown and return JSON.
-        Uses suggested prompt if available for better extraction.
+        If suggested_prompt is available, apply it along with the base schema extraction.
         """
         if suggested_prompt:
-            # Use the suggested prompt with schema
             schema_prompt = f"""
-        {suggested_prompt}
-        The JSON must strictly follow this schema:
+        Use the following instruction to improve extraction: "{suggested_prompt}"
+
+        Extract structured data from the document into JSON that strictly follows this schema:
         {json.dumps(schema, indent=2)}
 
         Document:
         {structured_markdown}
         """
         else:
-            # Default prompt if no suggested prompt available
             schema_prompt = f"""
         Extract structured data from the following document into JSON.
-        
         The JSON must strictly follow this schema:
-
-        Schema:
-
         {json.dumps(schema, indent=2)}
 
         Document:
         {structured_markdown}
-        Important Note: For this field : MMXML S3 MGC POTIONS TRUCK give null.
+        Important Note: if the JSON has items:quantity, then ignore it and give it as null
         """
-        
+
         raw_json = self._call_oci_llm(schema_prompt)
 
         try:

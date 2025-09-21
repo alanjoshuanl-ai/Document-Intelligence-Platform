@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS documents (
 """)
 conn.commit()
 
+
 def get_file_type(filename):
     """Extract file type from filename using regex (e.g. pdf, xlsx)."""
     match = re.search(r'\.([^.]+)$', filename)
@@ -60,25 +61,26 @@ async def process_document(file: UploadFile = File(...), schema_json: str = Form
             tmp.write(await file.read())
             tmp_path = tmp.name
 
+        # Run processor
         result = processor.process_document(tmp_path)
         structured_markdown = result["structured_markdown"]
         metadata = result["metadata"]
-        # embedding = result["embedding"]
 
         # Get suggested prompt before extraction
         suggested_prompt = processor.find_suggested_prompt(
-            current_client=metadata["customer_info"],
+            current_client=metadata["client_name"],
             current_layout=metadata["layout"],
             cursor=cur
         )
 
         # Use suggested prompt in extraction
         generated_json = processor.extract_json_with_schema(
-            structured_markdown, 
-            schema, 
+            structured_markdown,
+            schema,
             suggested_prompt
         )
 
+        # Store document in SQLite
         file_type = get_file_type(file.filename)
         cur.execute(
             """
@@ -88,10 +90,9 @@ async def process_document(file: UploadFile = File(...), schema_json: str = Form
             (
                 file.filename,
                 file_type,
-                metadata["customer_info"],
+                metadata["client_name"],
                 metadata["language"],
                 json.dumps(metadata["layout"]),
-                # json.dumps(embedding.tolist()),
                 None
             ),
         )
@@ -112,6 +113,76 @@ async def process_document(file: UploadFile = File(...), schema_json: str = Form
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+@app.post("/inference-document/")
+async def process_document(file: UploadFile = File(...), schema_json: str = Form(...)):
+    try:
+        schema = json.loads(schema_json)
+
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp.write(await file.read())
+            tmp_path = tmp.name
+
+        # Run processor
+        result = processor.process_document(tmp_path)
+        structured_markdown = result["structured_markdown"]
+        metadata = result["metadata"]
+
+        # Check if client name exists in database
+        cur.execute("SELECT COUNT(*) FROM documents WHERE client_name = ?", (metadata["client_name"],))
+        client_exists = cur.fetchone()[0] > 0
+        
+        if not client_exists:
+            return {
+                "status": "error", 
+                "message": "We don't have configurations setup for this type of layout. Please Configure it"
+            }
+
+        # Get suggested prompt before extraction
+        suggested_prompt = processor.find_suggested_prompt(
+            current_client=metadata["client_name"],
+            current_layout=metadata["layout"],
+            cursor=cur
+        )
+
+        # Use suggested prompt in extraction
+        generated_json = processor.extract_json_with_schema(
+            structured_markdown,
+            schema,
+            suggested_prompt
+        )
+
+        # Store document in SQLite
+        file_type = get_file_type(file.filename)
+        cur.execute(
+            """
+            INSERT INTO documents (filename, file_type, client_name, language, layout, user_prompt)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                file.filename,
+                file_type,
+                metadata["client_name"],
+                metadata["language"],
+                json.dumps(metadata["layout"]),
+                None
+            ),
+        )
+        doc_id = cur.lastrowid
+        conn.commit()
+
+        return {
+            "status": "success",
+            "document_id": doc_id,
+            "filename": file.filename,
+            "structured_markdown": structured_markdown,
+            "extracted_data": sanitize_for_json(generated_json),
+            "suggested_prompt": suggested_prompt,
+        }
+
+    except json.JSONDecodeError:
+        return {"status": "error", "message": "Invalid schema JSON format."}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 # === Try Prompt (no save) ===
 @app.post("/try-prompt/")
@@ -130,7 +201,6 @@ async def try_prompt(
         {json.dumps(schema, indent=2)}
         """
         raw_json = processor._call_oci_llm(custom_prompt)
-
         try:
             parsed_json = json.loads(raw_json)
         except:
