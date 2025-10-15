@@ -116,7 +116,7 @@ function PDFChatInterface() {
       formData.append("schema_json", schemaJson);
 
       const response = await axios.post(
-        "http://localhost:8000/process-document/",
+        "/api/process-document",
         formData,
         { headers: { "Content-Type": "multipart/form-data" } }
       );
@@ -150,7 +150,7 @@ function PDFChatInterface() {
     if (!inputPrompt.trim() || !documentId) return;
     try {
       setTrying(true);
-      const res = await axios.post("http://localhost:8000/try-prompt/", {
+      const res = await axios.post("/api/try-prompt", {
         document: structuredMarkdown,
         user_prompt: inputPrompt,
         schema_json: schemaJson,
@@ -170,7 +170,7 @@ function PDFChatInterface() {
   const handleSavePrompt = async () => {
     if (!inputPrompt.trim() || !documentId) return;
     try {
-      await axios.post("http://localhost:8000/save-prompt/", {
+      await axios.post("/api/save-prompt", {
         document_id: documentId,
         user_prompt: inputPrompt,
       });
