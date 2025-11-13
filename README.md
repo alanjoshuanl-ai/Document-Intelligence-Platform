@@ -54,7 +54,7 @@ pip install -r requirements.txt
 #### Run the backend server
 
 ```bash
-uvicorn main:app --reload --port 8000
+python main.py
 ```
 
 The backend will now be running at:
