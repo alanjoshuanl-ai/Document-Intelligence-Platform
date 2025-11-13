@@ -59,3 +59,13 @@ python main.py
 
 The backend will now be running at:
 [http://localhost:8000](http://localhost:8000)
+
+---
+
+## 📸 Preview
+
+### Home Page
+![Home Page](DIP1.png)
+
+### Dashboard
+![Dashboard](DIP2.png)
