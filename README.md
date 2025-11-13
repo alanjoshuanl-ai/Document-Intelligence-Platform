@@ -62,7 +62,7 @@ The backend will now be running at:
 
 ---
 
-## 📸 Project Screenshot
+## Project Screenshot
 
 ![Demo Screenshot](DIP1.png "Project Demo")
 ![Demo Screenshot](DIP2.png "Project Demo")
