@@ -13,10 +13,14 @@ import {
   Download,
   Eye,
   Filter,
-  ChevronRight
+  ChevronRight,
+  Users,
+  MessageCircle,
+  Bot,
+  FileCode
 } from 'lucide-react';
 
-const DOCUMENTS_ENDPOINT = "http://0.0.0.0:8080/documents/";
+const DOCUMENTS_ENDPOINT = "http://localhost:8080/documents/";
 
 function formatDate(dateString) {
   if (!dateString) return 'NULL';
@@ -232,6 +236,26 @@ function SearchBar({ searchTerm, onSearchChange, resultsCount, totalCount }) {
   );
 }
 
+function StatsCard({ icon: Icon, title, value, description, gradient, delay }) {
+  return (
+    <div 
+      className="bg-slate-800/50 backdrop-blur-sm rounded-xl border border-slate-700/50 shadow-lg p-6 transform transition-all duration-300 hover:scale-105 hover:shadow-xl animate-fade-in"
+      style={{ animationDelay: `${delay}ms` }}
+    >
+      <div className="flex items-center gap-4">
+        <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-white shadow-lg ${gradient}`}>
+          <Icon className="w-6 h-6" />
+        </div>
+        <div className="flex-1">
+          <p className="text-sm text-slate-400 font-medium">{title}</p>
+          <p className="text-2xl font-bold text-white mt-1">{value}</p>
+          <p className="text-xs text-slate-500 mt-1">{description}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LoadingSkeleton() {
   return (
     <div className="max-w-7xl mx-auto space-y-8">
@@ -240,19 +264,24 @@ function LoadingSkeleton() {
           <div className="h-8 bg-slate-700 rounded w-48 animate-pulse"></div>
           <div className="h-4 bg-slate-700 rounded w-64 animate-pulse"></div>
         </div>
-        <div className="bg-slate-800/50 rounded-2xl border border-slate-700/50 p-6 w-64">
-          <div className="flex items-center gap-4">
-            <div className="w-16 h-16 bg-slate-700 rounded-2xl animate-pulse"></div>
-            <div className="space-y-2">
-              <div className="h-4 bg-slate-700 rounded w-20 animate-pulse"></div>
-              <div className="h-6 bg-slate-700 rounded w-16 animate-pulse"></div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 flex-1 max-w-4xl">
+          {[...Array(4)].map((_, idx) => (
+            <div key={idx} className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-6 animate-pulse">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-slate-700 rounded-xl"></div>
+                <div className="space-y-2 flex-1">
+                  <div className="h-4 bg-slate-700 rounded w-20"></div>
+                  <div className="h-6 bg-slate-700 rounded w-12"></div>
+                  <div className="h-3 bg-slate-700 rounded w-16"></div>
+                </div>
+              </div>
             </div>
-          </div>
+          ))}
         </div>
       </div>
 
       {/* Search Bar Skeleton */}
-      <div className="bg-slate-800/50 rounded-2xl border border-slate-700/50 p-6">
+      <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-6">
         <div className="h-12 bg-slate-700 rounded-xl animate-pulse"></div>
       </div>
 
@@ -303,13 +332,18 @@ export default function DashboardPage() {
     totalProcessed: 0,
     documents: [],
     error: null,
-    loading: true
+    loading: true,
+    stats: {
+      totalClients: 0,
+      userPromptDocuments: 0,
+      systemPromptDocuments: 0
+    }
   });
 
   useEffect(() => {
     async function loadDocuments() {
       try {
-        const res = await fetch(DOCUMENTS_ENDPOINT, { cache: "no-store" });
+        const res = await fetch(DOCUMENTS_ENDPOINT);
         if (!res.ok) {
           throw new Error(`Request failed with status ${res.status}`);
         }
@@ -317,19 +351,37 @@ export default function DashboardPage() {
         if (result.status !== "success") {
           throw new Error("API returned error status");
         }
+        
+        const documents = Array.isArray(result.documents) ? result.documents : [];
+        
+        // Calculate statistics
+        const uniqueClients = new Set(documents.map(doc => doc.client_name).filter(Boolean));
+        const userPromptDocs = documents.filter(doc => doc.user_prompt && doc.user_prompt.trim() !== '').length;
+        const systemPromptDocs = documents.filter(doc => !doc.user_prompt || doc.user_prompt.trim() === '').length;
+        
         setData({
           totalProcessed: result.total_processed ?? 0,
-          documents: Array.isArray(result.documents) ? result.documents : [],
+          documents: documents,
           error: null,
-          loading: false
+          loading: false,
+          stats: {
+            totalClients: uniqueClients.size,
+            userPromptDocuments: userPromptDocs,
+            systemPromptDocuments: systemPromptDocs
+          }
         });
       } catch (error) {
         console.error("Failed to load documents:", error);
         setData({
           totalProcessed: 0,
           documents: [],
-          error: "Failed to load documents.",
-          loading: false
+          error: "Failed to load documents. Please check if the server is running.",
+          loading: false,
+          stats: {
+            totalClients: 0,
+            userPromptDocuments: 0,
+            systemPromptDocuments: 0
+          }
         });
       }
     }
@@ -337,7 +389,7 @@ export default function DashboardPage() {
     loadDocuments();
   }, []);
 
-  const { totalProcessed, documents, error, loading } = data;
+  const { totalProcessed, documents, error, loading, stats } = data;
 
   // Filter documents based on search term
   const filteredDocuments = documents.filter(doc => {
@@ -386,17 +438,24 @@ export default function DashboardPage() {
             transform: scale(1);
           }
         }
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
         .animate-fadeIn {
           animation: fadeIn 0.3s ease-out;
         }
         .animate-scaleIn {
           animation: scaleIn 0.3s ease-out;
         }
+        .animate-fade-in {
+          animation: fadeIn 0.6s ease-out both;
+        }
       `}</style>
 
       <div className="max-w-7xl mx-auto space-y-8">
         {/* Header Section */}
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-6">
+        <div className="flex flex-col gap-6">
           <div className="space-y-2">
             <h1 className="text-4xl font-bold bg-gradient-to-r from-white to-slate-200 bg-clip-text text-transparent">
               Document Dashboard
@@ -406,19 +465,40 @@ export default function DashboardPage() {
             </p>
           </div>
           
-          {/* Stats Card */}
-          <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl border border-slate-700/50 shadow-lg p-6 transform hover:scale-105 transition-transform duration-300">
-            <div className="flex items-center gap-4">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-purple-600 text-white flex items-center justify-center text-xl font-bold shadow-lg">
-                {totalProcessed}
-              </div>
-              <div>
-                <p className="text-sm text-slate-400 font-medium">Total processed files</p>
-                <p className="text-2xl font-bold text-white">
-                  {totalProcessed === 1 ? "1 document" : `${totalProcessed} documents`}
-                </p>
-              </div>
-            </div>
+          {/* Stats Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <StatsCard
+              icon={FileCode}
+              title="Total Processed Files"
+              value={totalProcessed}
+              description={totalProcessed === 1 ? "1 document" : `${totalProcessed} documents`}
+              gradient="bg-gradient-to-br from-blue-500 to-purple-600"
+              delay={0}
+            />
+            <StatsCard
+              icon={Users}
+              title="Total Clients"
+              value={stats.totalClients}
+              description={stats.totalClients === 1 ? "1 unique client" : `${stats.totalClients} unique clients`}
+              gradient="bg-gradient-to-br from-green-500 to-emerald-600"
+              delay={100}
+            />
+            <StatsCard
+              icon={MessageCircle}
+              title="User Prompts"
+              value={stats.userPromptDocuments}
+              description={stats.userPromptDocuments === 1 ? "1 document" : `${stats.userPromptDocuments} documents`}
+              gradient="bg-gradient-to-br from-orange-500 to-red-600"
+              delay={200}
+            />
+            <StatsCard
+              icon={Bot}
+              title="System Prompts"
+              value={stats.systemPromptDocuments}
+              description={stats.systemPromptDocuments === 1 ? "1 document" : `${stats.systemPromptDocuments} documents`}
+              gradient="bg-gradient-to-br from-purple-500 to-pink-600"
+              delay={300}
+            />
           </div>
         </div>
 
@@ -454,6 +534,9 @@ export default function DashboardPage() {
                   <AlertCircle className="w-8 h-8 text-red-400" />
                 </div>
                 <p className="text-red-400 font-medium">{error}</p>
+                <p className="text-slate-400 text-sm mt-2">
+                  Make sure the backend server is running on http://localhost:8080
+                </p>
               </div>
             ) : filteredDocuments.length === 0 ? (
               <div className="text-center py-16">
